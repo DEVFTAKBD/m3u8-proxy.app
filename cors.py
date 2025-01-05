@@ -12,28 +12,18 @@ async def cors(request: Request, origins, method="GET") -> Response:
         current_domain = origins
     if current_domain not in origins.replace(", ", ",").split(",") and origins != "*":
         return Response()
-
-    # Ensure the URL parameter is present in the query
     if not request.query_params.get('url'):
         return Response()
-
     file_type = request.query_params.get('type')
-
-    # Create the requested object
     requested = Requester(str(request.url))
     main_url = requested.host + requested.path + "?url="
-    
-    # Construct the URL by appending the query parameters (remaining_params)
     url = requested.query_params.get("url")
-    url += "?" + requested.query_string(requested.remaining_params)
+    url += "?"+requested.query_string(requested.remaining_params)
     requested = Requester(url)
-
-    # Prepare headers for the request
     hdrs = request.headers.mutablecopy()
-    hdrs["Accept-Encoding"] = ""  # Disable content encoding to avoid compression
+    hdrs["Accept-Encoding"] = ""
     hdrs.update(json.loads(request.query_params.get("headers", "{}").replace("'", '"')))
-
-    # Make the request
+    
     content, headers, code, cookies = requested.get(
         data=None,
         headers=hdrs,
@@ -42,18 +32,24 @@ async def cors(request: Request, origins, method="GET") -> Response:
         json_data=json.loads(request.query_params.get("json", "{}")),
         additional_params=json.loads(request.get('params', '{}'))
     )
-
-    # Set the CORS header to allow the current domain
+    
+    # Handle cache headers explicitly
+    headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, proxy-revalidate'
+    headers['Pragma'] = 'no-cache'
+    headers['Expires'] = '0'
+    
     headers['Access-Control-Allow-Origin'] = current_domain
-
-    # Clean unwanted headers
+    
+    # Remove unnecessary headers
     del_keys = [
-        'Vary', 'Content-Encoding', 'Transfer-Encoding', 'Content-Length',
+        'Vary',
+        'Content-Encoding',
+        'Transfer-Encoding',
+        'Content-Length',
     ]
     for key in del_keys:
         headers.pop(key, None)
 
-    # Handle M3U8 files
     if (file_type == "m3u8" or ".m3u8" in url) and code != 404:
         content = content.decode("utf-8")
         new_content = ""
@@ -66,24 +62,21 @@ async def cors(request: Request, origins, method="GET") -> Response:
                 new_content += main_url + requested.safe_sub(line)
             elif line.strip(' '):
                 new_content += main_url + requested.safe_sub(
-                    requested.host + '/' + '/'.join(str(requested.path).split('?')[0].split('/')[:-1]) +
-                    '/' + requested.safe_sub(line)
+                    requested.host +
+                    '/'.join(str(requested.path).split('?')[0].split('/')[:-1]) +
+                    '/' +
+                    requested.safe_sub(line)
                 )
             new_content += "\n"
         content = new_content
-
-    # Handle location header (redirection)
+    
     if "location" in headers:
         if headers["location"].startswith("/"):
             headers["location"] = requested.host + headers["location"]
         headers["location"] = main_url + headers["location"]
-
-    # Prepare the response
+    
     resp = Response(content, code, headers=headers)
-
-    # Set a cookie for the last requested host
     resp.set_cookie("_last_requested", requested.host, max_age=3600, httponly=True)
-
     return resp
 
 
